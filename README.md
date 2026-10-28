@@ -9,7 +9,7 @@ more usefully, what you're not.
 The thing I cared about most while building it: detection rules are *data*, not
 code. A rule is just an object that says "watch this service, these API calls,
 and optionally run this extra check." The engine itself knows nothing about
-ATT&CK — it loops over rules and asks "does this event match?" That separation is
+ATT&CK. It loops over rules and asks "does this event match?" That separation is
 the whole point. Adding a detection shouldn't mean editing the engine.
 
 ---
@@ -65,7 +65,8 @@ gone wrong.
 You'll need Python 3.10 or newer.
 
 ```bash
-cd mitre-detection-engine
+git clone https://github.com/SanayKrishna/Mitre-Cloudtrail-Detection.git
+cd Mitre-Cloudtrail-Detection
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env                                  # tweak if you like
@@ -73,10 +74,10 @@ cp .env.example .env                                  # tweak if you like
 
 ### The ATT&CK data
 
-The enricher reads `data/enterprise-attack.json` — the official MITRE STIX bundle
-— exactly once at startup. If it's not there, the app refuses to start and tells
+The enricher reads `data/enterprise-attack.json`, the official MITRE STIX bundle,
+exactly once at startup. If it's not there, the app refuses to start and tells
 you where to get it. Grab it from <https://github.com/mitre/cti>
-(`enterprise-attack/enterprise-attack.json`) and drop it in `data/`, or point
+(`enterprise-attack/enterprise-attack.json`), create a `data/` folder and drop it in, or point
 `STIX_DATA_PATH` somewhere else.
 
 Heads up: it's a ~45 MB file and parsing it takes a few seconds on startup. That's
@@ -98,13 +99,13 @@ pytest tests/ -v
 ```
 
 That's 33 tests covering the normalizer, the rules engine, the enricher (against
-the actual STIX file — nothing mocked), the alert builder, and the mock events.
+the actual STIX file, nothing mocked), the alert builder, and the mock events.
 
 ---
 
 ## The endpoints, with examples
 
-Fire a single suspicious event at it — disabling CloudTrail logging, which is
+Fire a single suspicious event at it. Disabling CloudTrail logging is
 about as loud as it gets:
 
 ```bash
@@ -139,7 +140,7 @@ curl -s 'http://127.0.0.1:8000/alerts?tactic=Exfiltration&limit=10&offset=0'
 curl -s 'http://127.0.0.1:8000/alerts/<alert-id>'      # 404 if it doesn't exist
 ```
 
-Coverage — how much of the cloud matrix you actually detect, and a per-technique
+Coverage: how much of the cloud matrix you actually detect, and a per-technique
 lookup:
 
 ```bash
@@ -171,7 +172,7 @@ requests.post("http://127.0.0.1:8000/ingest", json=get_mock_events())
 `ingestion/cloudtrail_reader.py` has two readers. Both return a plain list of
 event dicts, which is exactly what the pipeline wants.
 
-From files — it copes with `{"Records": [...]}` log files, a bare JSON array, or
+From files. It copes with `{"Records": [...]}` log files, a bare JSON array, or
 a whole directory of `.json` files:
 
 ```python
@@ -179,7 +180,7 @@ from ingestion.cloudtrail_reader import read_from_file
 records = read_from_file("data/my_cloudtrail_logs/")     # file or directory
 ```
 
-Or live, straight from the CloudTrail API (you'll need AWS credentials — it uses
+Or live, straight from the CloudTrail API (you'll need AWS credentials; it uses
 whatever boto3 finds via `AWS_PROFILE`, env vars, or an instance role):
 
 ```python
@@ -196,10 +197,8 @@ want a default file source.
 
 39 rules, mapping to 20 distinct ATT&CK techniques across 9 tactics.
 
-One thing worth being upfront about: the original brief's summary said "22
-techniques," but the technique list it actually spelled out only contains 20
-distinct IDs. I built exactly the rules that were enumerated (`RULE-001` through
-`RULE-039`), so 20 is the honest number. Every rule in the spec is present.
+Several techniques have more than one rule, because the same behavior shows up
+through different API calls. Disabling cloud logs alone has four.
 
 | Tactic                 | Technique | Name | Rules |
 |------------------------|-----------|------|-------|
@@ -226,29 +225,30 @@ distinct IDs. I built exactly the rules that were enumerated (`RULE-001` through
 
 ### A few things the live ATT&CK data threw at me
 
-Coverage is always computed from whatever STIX bundle you load — none of the
+Coverage is always computed from whatever STIX bundle you load. None of the
 numbers are hardcoded. The bundle I tested against is a 2026 ATT&CK release, and
 it surfaced some real-world messiness that the code handles on purpose:
 
 - **The tactics got renamed.** "Defense Evasion" is "Stealth" in the current data,
   and there's a new "Defense Impairment" tactic. Alerts keep the classic tactic
-  names from the rules (so `?tactic=Exfiltration` works like the brief expects),
+  names from the rules (so `?tactic=Exfiltration` keeps working),
   while `/coverage` groups by whatever the STIX file actually calls them.
 - **T1562.008 is flagged `revoked`** in this release. That's a taxonomy change, not
-  a sign the behavior stopped mattering — disabling CloudTrail is still about the
+  a sign the behavior stopped mattering. Disabling CloudTrail is still about the
   worst thing you can see. So the enricher deliberately keeps revoked techniques
   (it only drops *deprecated* ones), and this detection still enriches and counts.
 - **T1567 is a current technique but isn't tagged IaaS** in ATT&CK. `RULE-033`
   still detects it (someone opening a bucket policy to the world), but since it's
   not part of the cloud universe it doesn't show up in the IaaS coverage count.
-  That's why `/coverage` reports 19 cloud techniques covered rather than 20 —
+  That's why `/coverage` reports 19 cloud techniques covered rather than 20:
   T1567 is a bonus catch that lives outside the cloud scope.
 
-### One deliberate departure on `ConsoleLogin`
+### Matching real logs, not the docs
 
-The brief said to match `ConsoleLogin` (rules 001/002) on `iam.amazonaws.com`. In
-real CloudTrail those events come from `signin.amazonaws.com`, so that's what the
-rules use. If they matched the brief literally they'd never fire on actual logs.
+It is easy to assume `ConsoleLogin` (rules 001/002) arrives with
+`eventSource: iam.amazonaws.com`. In real CloudTrail it comes from
+`signin.amazonaws.com`, so that's what the rules match. Written the other way,
+they would never fire on actual logs.
 
 ---
 
@@ -256,8 +256,8 @@ rules use. If they matched the brief literally they'd never fire on actual logs.
 
 The alert store is just a Python list hanging off `app.state`. That's fine because
 uvicorn runs the handlers on a single event loop, so nothing mutates it
-concurrently. Run multiple workers and you'd want a lock — but the brief said
-in-memory only, so a list it is.
+concurrently. Run multiple workers and you'd want a lock or a real datastore.
+For a single-process tool, a list is enough.
 
 Both `/ingest` and `/analyze` save their alerts to that store, so the dashboard
 and `/alerts` reflect everything, however it came in. And `events_processed`
